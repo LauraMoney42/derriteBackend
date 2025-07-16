@@ -1,13 +1,11 @@
 // Complete Anonymous Safety Backend with Firebase Cloud Messaging
-// Updated with Category Support for Android App
+// Updated with Category Support and Environment Variables for Firebase
 
 const express = require('express');
 const admin = require('firebase-admin');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -32,51 +30,63 @@ const CATEGORY_ICONS = {
   'lost': '🔍'
 };
 
-// Initialize Firebase Admin - Updated to read JSON file
+// Initialize Firebase Admin - Updated to use Environment Variables
 let firebaseApp;
 let messagingEnabled = false;
 
 try {
-  // Try to read Firebase service account JSON file
-  const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_KEY || './firebase-service-account.json';
-  
-  if (fs.existsSync(serviceAccountPath)) {
-    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+  // Check if we have the required environment variables
+  if (process.env.FIREBASE_PROJECT_ID && 
+      process.env.FIREBASE_PRIVATE_KEY && 
+      process.env.FIREBASE_CLIENT_EMAIL) {
     
-    firebaseApp = admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-    });
+    console.log('Initializing Firebase from environment variables...');
     
-    messagingEnabled = true;
-    console.log('🔥 Firebase Admin initialized successfully!');
-    console.log(`📱 Project ID: ${serviceAccount.project_id}`);
-    console.log('📨 Push notifications ENABLED');
-    
-  } else if (process.env.FIREBASE_PROJECT_ID && process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-    // Fallback to environment variables
+    // Create service account object from environment variables
     const serviceAccount = {
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      type: "service_account",
+      project_id: process.env.FIREBASE_PROJECT_ID,
+      private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+      private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      client_email: process.env.FIREBASE_CLIENT_EMAIL,
+      client_id: process.env.FIREBASE_CLIENT_ID,
+      auth_uri: "https://accounts.google.com/o/oauth2/auth",
+      token_uri: "https://oauth2.googleapis.com/token",
+      auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+      client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL,
+      universe_domain: "googleapis.com"
     };
     
+    // Initialize Firebase Admin
     firebaseApp = admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
     
     messagingEnabled = true;
-    console.log('🔥 Firebase Admin initialized from environment variables!');
-    console.log(`📱 Project ID: ${process.env.FIREBASE_PROJECT_ID}`);
-    console.log('📨 Push notifications ENABLED');
+    console.log('Firebase Admin initialized successfully from environment variables!');
+    console.log(`Project ID: ${process.env.FIREBASE_PROJECT_ID}`);
+    console.log(`Client Email: ${process.env.FIREBASE_CLIENT_EMAIL}`);
+    console.log('Push notifications ENABLED');
     
   } else {
-    console.log('⚠️  Firebase service account file not found at:', serviceAccountPath);
-    console.log('⚠️  Firebase environment variables not found either');
-    console.log('💡 Push notifications will be disabled');
+    const missingVars = [];
+    if (!process.env.FIREBASE_PROJECT_ID) missingVars.push('FIREBASE_PROJECT_ID');
+    if (!process.env.FIREBASE_PRIVATE_KEY) missingVars.push('FIREBASE_PRIVATE_KEY');
+    if (!process.env.FIREBASE_CLIENT_EMAIL) missingVars.push('FIREBASE_CLIENT_EMAIL');
+    
+    console.log('Missing required Firebase environment variables:', missingVars.join(', '));
+    console.log('Push notifications will be disabled');
+    console.log('Set these environment variables in Railway to enable Firebase:');
+    console.log('   - FIREBASE_PROJECT_ID');
+    console.log('   - FIREBASE_PRIVATE_KEY_ID');
+    console.log('   - FIREBASE_PRIVATE_KEY');
+    console.log('   - FIREBASE_CLIENT_EMAIL');
+    console.log('   - FIREBASE_CLIENT_ID');
+    console.log('   - FIREBASE_CLIENT_CERT_URL');
   }
 } catch (error) {
   console.error('❌ Firebase initialization failed:', error.message);
-  console.log('💡 Push notifications will be disabled');
+  console.log('Push notifications will be disabled');
   messagingEnabled = false;
 }
 
@@ -98,7 +108,7 @@ setInterval(() => {
   }
   
   if (cleaned > 0) {
-    console.log(`🗑️ Cleaned up ${cleaned} expired reports`);
+    console.log(`Cleaned up ${cleaned} expired reports`);
   }
 }, 60 * 60 * 1000); // Clean every hour
 
@@ -183,7 +193,7 @@ function getAdjacentZones(zone) {
 // Send push notification to Firebase Cloud Messaging
 async function sendPushNotification(report, zones) {
   if (!messagingEnabled) {
-    console.log('📨 Push notifications disabled (Firebase not configured)');
+    console.log('Push notifications disabled (Firebase not configured)');
     return { success: false, reason: 'Firebase not configured' };
   }
   
@@ -205,7 +215,7 @@ async function sendPushNotification(report, zones) {
         data: {
           reportId: report.id,
           zone: report.zone,
-          category: report.category, // ← Include category in push data
+          category: report.category, // Include category in push data
           timestamp: report.timestamp.toString(),
           expires: report.expires.toString(),
           hasPhoto: report.hasPhoto.toString(),
@@ -228,7 +238,7 @@ async function sendPushNotification(report, zones) {
       try {
         const response = await admin.messaging().send(message);
         notifications.push({ zone, success: true, messageId: response });
-        console.log(`📨 ${categoryIcon} Push notification sent to topic: ${topicName} (${report.category})`);
+        console.log(`Push notification sent to topic: ${topicName} (${report.category})`);
       } catch (error) {
         notifications.push({ zone, success: false, error: error.message });
         console.error(`❌ Failed to send notification to zone ${zone}:`, error.message);
@@ -247,7 +257,7 @@ async function sendPushNotification(report, zones) {
 
 // Health check
 app.get('/health', (req, res) => {
-  console.log('💓 Health check requested');
+  console.log('Health check requested');
   
   // Count reports by category for stats
   const now = Date.now();
@@ -268,19 +278,20 @@ app.get('/health', (req, res) => {
     reports_count: reports.size,
     categories: categoryStats,
     valid_categories: VALID_CATEGORIES,
-    server: 'Anonymous Safety Backend v1.1 (with Categories)',
+    server: 'Anonymous Safety Backend v1.2 (Environment Variables)',
     privacy: 'No user tracking enabled',
     firebase_enabled: messagingEnabled,
+    firebase_project: process.env.FIREBASE_PROJECT_ID || 'not configured',
     push_notifications: messagingEnabled ? 'enabled' : 'disabled'
   });
 });
 
-// Submit report - UPDATED WITH CATEGORY SUPPORT
+// Submit report - WITH CATEGORY SUPPORT
 app.post('/report', async (req, res) => {
   try {
-    const { lat, lng, content, language, hasPhoto, category } = req.body; // ← Added category
+    const { lat, lng, content, language, hasPhoto, category } = req.body;
     
-    console.log(`📝 New report request: lat=${lat}, lng=${lng}, category=${category}, content="${content?.substring(0, 30)}..."`);
+    console.log(`New report request: lat=${lat}, lng=${lng}, category=${category}, content="${content?.substring(0, 30)}..."`);
     
     if (!lat || !lng || !content) {
       console.log('❌ Missing required fields');
@@ -301,7 +312,7 @@ app.post('/report', async (req, res) => {
       content: sanitizeContent(content),
       language: language || 'unknown',
       hasPhoto: Boolean(hasPhoto),
-      category: validatedCategory, // ← Store validated category
+      category: validatedCategory,
       timestamp: fuzzyTimestamp(),
       expires: Date.now() + REPORT_EXPIRY
     };
@@ -309,26 +320,26 @@ app.post('/report', async (req, res) => {
     // Store report
     reports.set(report.id, report);
     
-    console.log(`✅ ${categoryIcon} Report ${report.id} stored in zone ${report.zone}`);
-    console.log(`📂 Category: ${validatedCategory} ${categoryIcon}`);
-    console.log(`📋 Content: "${report.content}"`);
-    console.log(`🌍 Zone: ${report.zone} (anonymized from ${lat}, ${lng})`);
-    console.log(`⏰ Expires: ${new Date(report.expires).toLocaleString()}`);
+    console.log(`Report ${report.id} stored in zone ${report.zone}`);
+    console.log(`Category: ${validatedCategory} ${categoryIcon}`);
+    console.log(`Content: "${report.content}"`);
+    console.log(`Zone: ${report.zone} (anonymized from ${lat}, ${lng})`);
+    console.log(`Expires: ${new Date(report.expires).toLocaleString()}`);
     
     // Get affected zones (current + adjacent)
     const affectedZones = getAdjacentZones(location.zone);
-    console.log(`📡 Broadcasting ${validatedCategory} alert to ${affectedZones.length} zones: ${affectedZones.join(', ')}`);
+    console.log(`Broadcasting ${validatedCategory} alert to ${affectedZones.length} zones: ${affectedZones.join(', ')}`);
     
     // Send push notifications with category
     const pushResult = await sendPushNotification(report, affectedZones);
     
-    console.log(`📊 Total reports: ${reports.size}`);
+    console.log(`Total reports: ${reports.size}`);
     
     res.json({
       success: true,
       reportId: report.id,
       zone: report.zone,
-      category: report.category, // ← Include category in response
+      category: report.category,
       categoryIcon: categoryIcon,
       timestamp: report.timestamp,
       expires: report.expires,
@@ -343,14 +354,14 @@ app.post('/report', async (req, res) => {
   }
 });
 
-// Get reports for a zone - UPDATED TO INCLUDE CATEGORY
+// Get reports for a zone - WITH CATEGORY SUPPORT
 app.get('/zone/:zoneId', (req, res) => {
   try {
     const { zoneId } = req.params;
     const { category } = req.query; // Optional category filter
     const now = Date.now();
     
-    console.log(`🔍 Zone request for: ${zoneId}${category ? ` (category: ${category})` : ''}`);
+    console.log(`Zone request for: ${zoneId}${category ? ` (category: ${category})` : ''}`);
     
     let zoneReports = Array.from(reports.values())
       .filter(report => report.zone === zoneId && report.expires > now);
@@ -370,13 +381,13 @@ app.get('/zone/:zoneId', (req, res) => {
         content: report.content,
         language: report.language,
         hasPhoto: report.hasPhoto,
-        category: report.category, // ← Include category in response
+        category: report.category,
         categoryIcon: CATEGORY_ICONS[report.category],
         timestamp: report.timestamp,
         expires: report.expires
       }));
     
-    console.log(`📊 Found ${zoneReports.length} reports for zone ${zoneId}${category ? ` (${category})` : ''}`);
+    console.log(`Found ${zoneReports.length} reports for zone ${zoneId}${category ? ` (${category})` : ''}`);
     
     res.json({
       zone: zoneId,
@@ -396,9 +407,9 @@ app.get('/zone/:zoneId', (req, res) => {
 // Subscribe to zone notifications
 app.post('/subscribe', async (req, res) => {
   try {
-    const { lat, lng, platform, token, categories } = req.body; // ← Added optional categories filter
+    const { lat, lng, platform, token, categories } = req.body;
     
-    console.log(`📱 Subscription request: platform=${platform}, lat=${lat}, lng=${lng}, categories=${categories}`);
+    console.log(`Subscription request: platform=${platform}, lat=${lat}, lng=${lng}, categories=${categories}`);
     
     if (!lat || !lng) {
       return res.status(400).json({ error: 'Missing location' });
@@ -417,14 +428,14 @@ app.post('/subscribe', async (req, res) => {
         try {
           await admin.messaging().subscribeToTopic([token], topicName);
           subscriptionResults.push({ zone, topic: topicName, success: true });
-          console.log(`✅ Subscribed token to topic: ${topicName}`);
+          console.log(`Subscribed token to topic: ${topicName}`);
         } catch (error) {
           subscriptionResults.push({ zone, topic: topicName, success: false, error: error.message });
           console.error(`❌ Failed to subscribe to topic ${topicName}:`, error.message);
         }
       }
     } else {
-      console.log(`📝 Subscription registered for zone ${location.zone} (FCM disabled or no token)`);
+      console.log(`Subscription registered for zone ${location.zone} (FCM disabled or no token)`);
     }
     
     res.json({
@@ -434,7 +445,7 @@ app.post('/subscribe', async (req, res) => {
       platform: platform,
       firebase_enabled: messagingEnabled,
       subscriptions: subscriptionResults,
-      valid_categories: VALID_CATEGORIES, // ← Include valid categories
+      valid_categories: VALID_CATEGORIES,
       message: messagingEnabled ? 'Subscribed to push notifications' : 'Subscription registered (push notifications disabled)',
       timestamp: Date.now()
     });
@@ -445,7 +456,7 @@ app.post('/subscribe', async (req, res) => {
   }
 });
 
-// NEW: Get reports by category across all zones
+// Get reports by category across all zones
 app.get('/reports/category/:category', (req, res) => {
   try {
     const { category } = req.params;
@@ -459,7 +470,7 @@ app.get('/reports/category/:category', (req, res) => {
     }
     
     const normalizedCategory = category.toLowerCase();
-    console.log(`🔍 Category search for: ${normalizedCategory}`);
+    console.log(`Category search for: ${normalizedCategory}`);
     
     const categoryReports = Array.from(reports.values())
       .filter(report => report.category === normalizedCategory && report.expires > now)
@@ -477,7 +488,7 @@ app.get('/reports/category/:category', (req, res) => {
         expires: report.expires
       }));
     
-    console.log(`📊 Found ${categoryReports.length} ${normalizedCategory} reports`);
+    console.log(`Found ${categoryReports.length} ${normalizedCategory} reports`);
     
     res.json({
       category: normalizedCategory,
@@ -493,7 +504,7 @@ app.get('/reports/category/:category', (req, res) => {
   }
 });
 
-// Get all zones with report counts (for debugging) - UPDATED WITH CATEGORY BREAKDOWN
+// Get all zones with report counts (for debugging) - WITH CATEGORY BREAKDOWN
 app.get('/debug/zones', (req, res) => {
   try {
     const now = Date.now();
@@ -517,7 +528,7 @@ app.get('/debug/zones', (req, res) => {
       }
     }
     
-    console.log(`🗺️ Debug zones request - Active zones: ${Object.keys(zones).length}`);
+    console.log(`Debug zones request - Active zones: ${Object.keys(zones).length}`);
     
     res.json({
       zones,
@@ -527,6 +538,7 @@ app.get('/debug/zones', (req, res) => {
       valid_categories: VALID_CATEGORIES,
       category_icons: CATEGORY_ICONS,
       firebase_enabled: messagingEnabled,
+      firebase_project: process.env.FIREBASE_PROJECT_ID || 'not configured',
       timestamp: Date.now()
     });
     
@@ -538,38 +550,42 @@ app.get('/debug/zones', (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log('🚀 ================================');
-  console.log(`🚀 Anonymous Safety Backend STARTED`);
-  console.log(`🚀 ================================`);
-  console.log(`📡 Server: http://localhost:${PORT}`);
-  console.log(`💓 Health: http://localhost:${PORT}/health`);
-  console.log(`🔐 Privacy: No user tracking enabled`);
-  console.log(`⏰ Auto-delete: Reports expire in 8 hours`);
-  console.log(`🔥 Firebase: ${messagingEnabled ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`📨 Push notifications: ${messagingEnabled ? 'ENABLED' : 'DISABLED'}`);
-  console.log(`📂 Categories: ${VALID_CATEGORIES.join(', ')}`);
-  console.log(`🧪 Debug: http://localhost:${PORT}/debug/zones`);
-  console.log('🚀 ================================');
+  console.log('================================');
+  console.log(`Anonymous Safety Backend STARTED`);
+  console.log(`================================`);
+  console.log(`Server: http://localhost:${PORT}`);
+  console.log(`Health: http://localhost:${PORT}/health`);
+  console.log(`Privacy: No user tracking enabled`);
+  console.log(`Auto-delete: Reports expire in 8 hours`);
+  console.log(`Firebase: ${messagingEnabled ? 'ENABLED' : 'DISABLED'}`);
+  if (messagingEnabled) {
+    console.log(`Project: ${process.env.FIREBASE_PROJECT_ID}`);
+  }
+  console.log(`Push notifications: ${messagingEnabled ? 'ENABLED' : 'DISABLED'}`);
+  console.log(`Categories: ${VALID_CATEGORIES.join(', ')}`);
+  console.log(`Debug: http://localhost:${PORT}/debug/zones`);
+  console.log('================================');
   
   if (messagingEnabled) {
-    console.log('📱 Ready to send push notifications with categories!');
+    console.log('Ready to send push notifications with categories!');
   } else {
-    console.log('⚠️  Firebase service account file needed for push notifications');
-    console.log('💡 Place firebase-service-account.json in the project folder');
+    console.log('Firebase environment variables needed for push notifications');
+    console.log('Set these variables in Railway dashboard:');
+    console.log('   FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL');
   }
   
-  console.log('📝 Ready to receive categorized anonymous reports!');
+  console.log('Ready to receive categorized anonymous reports!');
   console.log(`${CATEGORY_ICONS.safety} Safety | ${CATEGORY_ICONS.fun} Fun | ${CATEGORY_ICONS.lost} Lost/Found`);
   console.log('');
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('🛑 Server shutting down...');
+  console.log('Server shutting down...');
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
-  console.log('🛑 Server stopping...');
+  console.log('Server stopping...');
   process.exit(0);
 });

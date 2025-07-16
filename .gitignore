@@ -13,7 +13,7 @@ firebase-adminsdk-*.json
 config.json
 secrets.json
 credentials.json
-
+  
 # Dependencies
 node_modules/
 npm-debug.log*
